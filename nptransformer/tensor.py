@@ -26,7 +26,15 @@ def Sigmoid(data: 'Tensor'):
 def Softmax(data: 'Tensor'):
     return data.softmax()
 
-class SequentialModel:
+def Exp(data: 'Tensor'):
+    return data.exp()
+
+class Model:
+    def __call__(self, x: 'Tensor'):
+        return self.forward(x)
+
+
+class SequentialModel(Model):
     """
     Simple sequential model
     """
@@ -35,12 +43,35 @@ class SequentialModel:
 
         self.layers = layers
 
-    def __call__(self, x: 'Tensor'):
-        return self.forward(x)
-
     def forward(self, x: 'Tensor'):
         for layer in self.layers:
             x = layer(x)
+        return x
+
+
+class TestModel(Model):
+    def __init__(self):
+        self.fc1 = FC(784, 64, nonlin=ReLU)
+
+        self.fc2a = FC(32, 32, nonlin=ReLU)
+        self.fc2b = FC(32, 32, nonlin=ReLU)
+        # self.fc2a = FC(16, 16, nonlin=ReLU)
+        # self.fc2b = FC(16, 16, nonlin=ReLU)
+        # self.fc2c = FC(16, 16, nonlin=ReLU)
+        # self.fc2d = FC(16, 16, nonlin=ReLU)
+
+        self.fc3 = FC(64, 10)
+
+    def forward(self, x: 'Tensor'):
+
+        x = self.fc1(x)
+        x1, x2 = x.split(2, -1)
+        x1 = self.fc2a(x1)
+        x2 = self.fc2b(x2)
+        # x = ...
+
+        x = self.fc3(x)
+
         return x
 
 
@@ -108,7 +139,7 @@ class Tensor:
 
     def split(self, indices_or_sections, axis=0):
         new_tensors = [
-            Tensor(arr, grad=grad) 
+            Tensor(arr, grad=grad, _children=(self,)) 
             for arr, grad in zip(
                 np.split(self.data, indices_or_sections=indices_or_sections, axis=axis),
                 np.split(self.grad, indices_or_sections=indices_or_sections, axis=axis),
@@ -116,6 +147,16 @@ class Tensor:
         ]
 
         return new_tensors
+
+    @property
+    def T(self):
+        assert len(self.shape) == 2
+        out = Tensor(self.data.T, grad=self.grad.T, children=(self,))
+        return out
+
+    def transpose(self, *args):
+        out = Tensor(self.data.transpose(*args), grad=self.grad.transpose(*args), children=(self,))
+        return out
 
     def __mul__(self, other):
         if not isinstance(other, Tensor):
@@ -131,6 +172,12 @@ class Tensor:
         out._backward = _backward
 
         return out
+
+    def __matmul___(self, other):  # @ operator
+        pass
+
+    def __rmatmul__(self, other):
+        pass
 
     def __pow__(self, other):
         assert isinstance(other, (int, float)), "only supporting int/float powers for now"
@@ -169,16 +216,11 @@ class Tensor:
         return out
 
     def sigmoid(self):
-        out = Tensor(1/(1+np.exp(-self.data)))
-
-        def _backward():
-            self.grad += (1-out.data)*out.data * out.grad
-        out._backward = _backward
-
+        out = 1/(1+Exp(-self))
         return out
 
     def exp(self):
-        out = Tensor(np.exp(self.data))
+        out = Tensor(np.exp(self.data), (self,), 'exp')
 
         def _backward():
             self.grad += out.data * out.grad
@@ -186,13 +228,26 @@ class Tensor:
 
         return out
 
+    def log(self):
+        eps = 1e-8
+        out = Tensor(np.log(self.data + eps), (self,), 'log')
+
+        def _backward():
+            self.grad += 1/(self.data + eps) * out.grad
+        out._backward = _backward
+
+        return out
+
     def softmax(self):
-        out = self.exp()
-        out /= Tensor(np.sum(out, axis=1, keepdims=True), nograd=True)
+        exp_self = np.exp(self.data)
+        out = Tensor(exp_self / np.sum(exp_self, axis=1, keepdims=True), (self,), 'softmax')
+
+        def _backward():
+            self.grad += (out.data * (1 - out.data)) * out.grad
+        out._backward = _backward
         return out
 
     def backward(self):
-
         # topological order all of the children in the graph
         topo = []
         visited = set()
