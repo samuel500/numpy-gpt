@@ -2,6 +2,7 @@
 Adapted from https://github.com/karpathy/micrograd/blob/master/micrograd/nn.py
 """
 
+from abc import abstractmethod
 import numpy as np
 import logging
 import math
@@ -30,6 +31,11 @@ def Exp(data: 'Tensor'):
     return data.exp()
 
 class Model:
+
+    @abstractmethod
+    def forward(self, x: 'Tensor'):
+        pass
+
     def __call__(self, x: 'Tensor'):
         return self.forward(x)
 
@@ -40,7 +46,6 @@ class SequentialModel(Model):
     """
 
     def __init__(self, layers: list):
-
         self.layers = layers
 
     def forward(self, x: 'Tensor'):
@@ -48,19 +53,44 @@ class SequentialModel(Model):
             x = layer(x)
         return x
 
+# class Switch:
+
+#     def __init__(self, lays: list):
+#         self.
+#         self.W = Tensor()  #...
+
+#     self forward(self, x):
+#         # ...
+
+#     self backward(self):
+
+
+class Embedding(Model):
+
+    def __init__(self, num_embeddings, embedding_dim):
+        self.num_embeddings = num_embeddings
+        self.embedding_dim = embedding_dim
+        self.W = Tensor(np.random.normal(size=(num_embeddings, embedding_dim)))
+
+    def forward(self, vocab_ids):
+
+        one_hot = Tensor(np.eye(self.num_embeddings)[vocab_ids], nograd=True)
+
+        return one_hot.dot(self.W)  #split(self.num_embeddings) #[vocab_id]
+
 
 class TestModel(Model):
     def __init__(self):
-        self.fc1 = FC(784, 64, nonlin=ReLU)
+        self.fc1 = Linear(784, 64, nonlin=ReLU)
 
-        self.fc2a = FC(32, 32, nonlin=ReLU)
-        self.fc2b = FC(32, 32, nonlin=ReLU)
+        self.fc2a = Linear(32, 32, nonlin=ReLU)
+        self.fc2b = Linear(32, 32, nonlin=ReLU)
         # self.fc2a = FC(16, 16, nonlin=ReLU)
         # self.fc2b = FC(16, 16, nonlin=ReLU)
         # self.fc2c = FC(16, 16, nonlin=ReLU)
         # self.fc2d = FC(16, 16, nonlin=ReLU)
 
-        self.fc3 = FC(64, 10)
+        self.fc3 = Linear(64, 10)
 
     def forward(self, x: 'Tensor'):
 
@@ -75,7 +105,7 @@ class TestModel(Model):
         return x
 
 
-class FC:
+class Linear:
 
     def __init__(self, nin, nout, nonlin=None) -> None:
 
@@ -86,10 +116,10 @@ class FC:
         
         self.W = Tensor(npw)
 
-    def __call__(self, x):
+    def __call__(self, x) -> 'Tensor':
         return self.forward(x)
         
-    def forward(self, x):
+    def forward(self, x) -> 'Tensor':
         x = x.dot(self.W)
         if self.nonlin:
             x = self.nonlin(x)
@@ -129,10 +159,11 @@ class Tensor:
         out = Tensor(np.dot(self.data, other.data), (self, other), 'dot')
 
         def _backward():
-            # logger.info(f"{other.grad.shape=}, {self.data.shape=}, {out.grad.shape=}")
-            other.grad += self.data.T.dot(out.grad) # out.grad.dot(other.data.T) 
-            # logger.info(f"{self.grad.shape=}, {other.grad.shape=}, {other.data.shape=}")
-            self.grad += out.grad.dot(other.data.T)
+            if not self._nograd:
+                self.grad += out.grad.dot(other.data.T)
+            if not other._nograd:
+                other.grad += self.data.T.dot(out.grad)
+
         out._backward = _backward
 
         return out
@@ -158,6 +189,22 @@ class Tensor:
         out = Tensor(self.data.transpose(*args), grad=self.grad.transpose(*args), children=(self,))
         return out
 
+    def reshape(self, *args):
+        out = Tensor(self.data.reshape(*args), grad=self.grad.reshape(*args), children=(self,))
+        return out
+
+    # @classmethod
+    # def concat(tensors, axis=-1):
+
+    #     tensor_data = np.concatenate([tensor.data for tensor in tensors], axis=axis)
+    #     grad = np.zeros_like(tensor_data)
+    #     # for i, g in enumerate(grad.split(grad, indices_or_sections=len(tensors), axis=axis)):
+    #     #     tensors[i] 
+    #     out = Tensor( , op='concat')
+
+    #     return out
+        
+
     def __mul__(self, other):
         if not isinstance(other, Tensor):
             other = Tensor(other, nograd=True)
@@ -174,10 +221,17 @@ class Tensor:
         return out
 
     def __matmul___(self, other):  # @ operator
-        pass
+        out = Tensor(self.data @ other.data, (self, other), '@')
+
+        def _backward():
+            # pass
+            pass
+        out._backward = _backward
+
+        return out
 
     def __rmatmul__(self, other):
-        pass
+        raise NotImplementedError
 
     def __pow__(self, other):
         assert isinstance(other, (int, float)), "only supporting int/float powers for now"
@@ -239,8 +293,10 @@ class Tensor:
         return out
 
     def softmax(self):
+        self.data -= np.max(self.data, axis=-1, keepdims=True)  # stability 
+
         exp_self = np.exp(self.data)
-        out = Tensor(exp_self / np.sum(exp_self, axis=1, keepdims=True), (self,), 'softmax')
+        out = Tensor(exp_self / np.sum(exp_self, axis=-1, keepdims=True), (self,), 'softmax')
 
         def _backward():
             self.grad += (out.data * (1 - out.data)) * out.grad
