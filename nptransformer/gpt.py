@@ -112,9 +112,17 @@ class GPT(Model):
 
         return x
 
-    def generate(self, x, max_new_tokens):
-        pass
+    def generate(self, idx, max_new_tokens):
+        
+        for _ in range(max_new_tokens):
 
+            logits = self(idx)
+
+            x_next = np.argmax(logits, dim=-1)
+
+            idx = np.concatenate((idx, x_next), dim=1) 
+            
+        return idx
 
 
 

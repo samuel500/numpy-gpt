@@ -53,17 +53,6 @@ class SequentialModel(Model):
             x = layer(x)
         return x
 
-# class Switch:
-
-#     def __init__(self, lays: list):
-#         self.
-#         self.W = Tensor()  #...
-
-#     self forward(self, x):
-#         # ...
-
-#     self backward(self):
-
 
 class Embedding(Model):
 
@@ -107,20 +96,27 @@ class TestModel(Model):
 
 class Linear:
 
-    def __init__(self, nin, nout, nonlin=None) -> None:
+    def __init__(self, nin, nout, nonlin=None, use_bias=True) -> None:
 
         self.nonlin = nonlin
+        self.use_bias = use_bias
 
         scale = np.sqrt(2/(nin+nout))
         npw = np.random.normal(size=(nin, nout), scale=scale)
         
         self.W = Tensor(npw)
 
+        self.B = None
+        if self.use_bias:
+            self.B = Tensor(np.zeros(nout))
+
     def __call__(self, x) -> 'Tensor':
         return self.forward(x)
         
     def forward(self, x) -> 'Tensor':
         x = x.dot(self.W)
+        if self.use_bias:
+            x += self.B
         if self.nonlin:
             x = self.nonlin(x)
 
@@ -130,13 +126,17 @@ class Linear:
 class Tensor:
 
     def __init__(self, data, _children=(), _op='', nograd=False, grad=None):
-        self.data = np.array(data) 
-        self.grad = np.zeros(shape=self.data.shape) if grad is None else grad
         # internal variables used for autograd graph construction
         self._backward = lambda: None
         self._prev = set(_children)
         self._nograd = nograd
         self._op = _op # the op that produced this node, for graphviz / debugging / etc
+
+        self.data = np.array(data)
+        self.grad = None
+        if not nograd:
+            self.grad = np.zeros(shape=self.data.shape) if grad is None else grad
+        
 
     def __add__(self, other):
         # other = other if isinstance(other, Tensor) else Tensor(other)
@@ -149,7 +149,10 @@ class Tensor:
             if not self._nograd:
                 self.grad += out.grad
             if not other._nograd:
-                other.grad += out.grad
+                if len(other.grad.shape)+1 == len(out.grad.shape):  # Bias
+                    other.grad += out.grad.sum(axis=0)
+                else:
+                    other.grad += out.grad
         out._backward = _backward
 
         return out
@@ -191,19 +194,7 @@ class Tensor:
 
     def reshape(self, *args):
         out = Tensor(self.data.reshape(*args), grad=self.grad.reshape(*args), children=(self,))
-        return out
-
-    # @classmethod
-    # def concat(tensors, axis=-1):
-
-    #     tensor_data = np.concatenate([tensor.data for tensor in tensors], axis=axis)
-    #     grad = np.zeros_like(tensor_data)
-    #     # for i, g in enumerate(grad.split(grad, indices_or_sections=len(tensors), axis=axis)):
-    #     #     tensors[i] 
-    #     out = Tensor( , op='concat')
-
-    #     return out
-        
+        return out        
 
     def __mul__(self, other):
         if not isinstance(other, Tensor):
@@ -224,8 +215,11 @@ class Tensor:
         out = Tensor(self.data @ other.data, (self, other), '@')
 
         def _backward():
-            # pass
-            pass
+            if not self._nograd:
+                self.grad += (other.data @ out.grad).swapaxes(-1,-2)
+            if not other._nograd:
+                other.grad += self.data.swapaxes(-1,-2) @ out.grad
+
         out._backward = _backward
 
         return out
