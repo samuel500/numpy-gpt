@@ -39,6 +39,17 @@ class Model:
     def __call__(self, x: 'Tensor'):
         return self.forward(x)
 
+    def get_trainable_tensors(self):
+        trainable_tensors = set()
+        for att in dir(self):
+            attribute = getattr(self, att)
+            if isinstance(attribute, Tensor) and attribute._nograd is False:
+                trainable_tensors.add(attribute)
+            elif issubclass(type(attribute), Model):
+                trainable_tensors |= attribute.get_trainable_tensors()
+        return trainable_tensors
+
+
 
 class SequentialModel(Model):
     """
@@ -59,7 +70,7 @@ class Embedding(Model):
     def __init__(self, num_embeddings, embedding_dim):
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
-        self.W = Tensor(np.random.normal(size=(num_embeddings, embedding_dim)))
+        self.W = Tensor(np.random.normal(size=(num_embeddings, embedding_dim), scale=0.02))
 
     def forward(self, vocab_ids):
 
@@ -68,43 +79,42 @@ class Embedding(Model):
         return one_hot.dot(self.W)  #split(self.num_embeddings) #[vocab_id]
 
 
-class TestModel(Model):
-    def __init__(self):
-        self.fc1 = Linear(784, 64, nonlin=ReLU)
+# class TestModel(Model):
+#     def __init__(self):
+#         self.fc1 = Linear(784, 64, nonlin=ReLU)
 
-        self.fc2a = Linear(32, 32, nonlin=ReLU)
-        self.fc2b = Linear(32, 32, nonlin=ReLU)
-        # self.fc2a = FC(16, 16, nonlin=ReLU)
-        # self.fc2b = FC(16, 16, nonlin=ReLU)
-        # self.fc2c = FC(16, 16, nonlin=ReLU)
-        # self.fc2d = FC(16, 16, nonlin=ReLU)
+#         self.fc2a = Linear(32, 32, nonlin=ReLU)
+#         self.fc2b = Linear(32, 32, nonlin=ReLU)
+#         # self.fc2a = FC(16, 16, nonlin=ReLU)
+#         # self.fc2b = FC(16, 16, nonlin=ReLU)
+#         # self.fc2c = FC(16, 16, nonlin=ReLU)
+#         # self.fc2d = FC(16, 16, nonlin=ReLU)
 
-        self.fc3 = Linear(64, 10)
+#         self.fc3 = Linear(64, 10)
 
-    def forward(self, x: 'Tensor'):
+#     def forward(self, x: 'Tensor'):
 
-        x = self.fc1(x)
-        x1, x2 = x.split(2, -1)
-        x1 = self.fc2a(x1)
-        x2 = self.fc2b(x2)
-        # x = ...
+#         x = self.fc1(x)
+#         x1, x2 = x.split(2, -1)
+#         x1 = self.fc2a(x1)
+#         x2 = self.fc2b(x2)
+#         # x = ...
 
-        x = self.fc3(x)
+#         x = self.fc3(x)
 
-        return x
+#         return x
 
 
 class Linear:
 
-    def __init__(self, nin, nout, nonlin=None, use_bias=True) -> None:
+    def __init__(self, nin, nout, nonlin=None, use_bias=False, name='') -> None:
 
         self.nonlin = nonlin
         self.use_bias = use_bias
 
-        scale = np.sqrt(2/(nin+nout))
+        scale = 0.02 #np.sqrt(2/(nin+nout))
         npw = np.random.normal(size=(nin, nout), scale=scale)
-        
-        self.W = Tensor(npw)
+        self.W = Tensor(npw, name=name)
 
         self.B = None
         if self.use_bias:
@@ -125,18 +135,23 @@ class Linear:
 
 class Tensor:
 
-    def __init__(self, data, _children=(), _op='', nograd=False, grad=None):
+    def __init__(self, data, _children=(), _op='', nograd=False, grad=None, name=''):
         # internal variables used for autograd graph construction
         self._backward = lambda: None
         self._prev = set(_children)
         self._nograd = nograd
         self._op = _op # the op that produced this node, for graphviz / debugging / etc
 
+        self.name = f"{name}-[_op:{_op}]"
         self.data = np.array(data)
         self.grad = None
         if not nograd:
             self.grad = np.zeros(shape=self.data.shape) if grad is None else grad
-        
+            if grad is not None:
+                assert grad.shape == self.data.shape
+
+    def __repr__(self):
+        return f"Tensor({self.shape})[{self.name}]"
 
     def __add__(self, other):
         # other = other if isinstance(other, Tensor) else Tensor(other)
@@ -163,9 +178,11 @@ class Tensor:
 
         def _backward():
             if not self._nograd:
-                self.grad += out.grad.dot(other.data.T)
+                self.grad += out.grad.dot(other.data.swapaxes(-1,-2))
             if not other._nograd:
-                other.grad += self.data.T.dot(out.grad)
+                other.grad += self.data.T.reshape(self.data.T.shape[0], np.prod(self.data.T.shape[1:])).dot(
+                                                                (out.grad.reshape(np.prod(out.grad.shape[:-1]), out.grad.shape[-1]))
+                                                            )
 
         out._backward = _backward
 
@@ -173,7 +190,7 @@ class Tensor:
 
     def split(self, indices_or_sections, axis=0):
         new_tensors = [
-            Tensor(arr, grad=grad, _children=(self,)) 
+            Tensor(arr, grad=grad, _children=(self,), _op='split') 
             for arr, grad in zip(
                 np.split(self.data, indices_or_sections=indices_or_sections, axis=axis),
                 np.split(self.grad, indices_or_sections=indices_or_sections, axis=axis),
@@ -185,15 +202,15 @@ class Tensor:
     @property
     def T(self):
         assert len(self.shape) == 2
-        out = Tensor(self.data.T, grad=self.grad.T, children=(self,))
+        out = Tensor(self.data.T, grad=self.grad.T, _children=(self,), _op='T')
         return out
 
     def transpose(self, *args):
-        out = Tensor(self.data.transpose(*args), grad=self.grad.transpose(*args), children=(self,))
+        out = Tensor(self.data.transpose(*args), grad=self.grad.transpose(*args), _children=(self,), _op='transpose')
         return out
 
     def reshape(self, *args):
-        out = Tensor(self.data.reshape(*args), grad=self.grad.reshape(*args), children=(self,))
+        out = Tensor(self.data.reshape(*args), grad=self.grad.reshape(*args), _children=(self,), _op='reshape')
         return out        
 
     def __mul__(self, other):
@@ -206,17 +223,18 @@ class Tensor:
             if not self._nograd:
                 self.grad += other.data * out.grad
             if not other._nograd:
+                # logger.info(f"{self.data=} ; {out.data=}")
                 other.grad += self.data * out.grad 
         out._backward = _backward
 
         return out
 
-    def __matmul___(self, other):  # @ operator
+    def __matmul__(self, other):  # @ operator
         out = Tensor(self.data @ other.data, (self, other), '@')
 
         def _backward():
             if not self._nograd:
-                self.grad += (other.data @ out.grad).swapaxes(-1,-2)
+                self.grad += (other.data @ out.grad.swapaxes(-1,-2)).swapaxes(-1,-2)
             if not other._nograd:
                 other.grad += self.data.swapaxes(-1,-2) @ out.grad
 
@@ -225,7 +243,7 @@ class Tensor:
         return out
 
     def __rmatmul__(self, other):
-        raise NotImplementedError
+        return other @ self
 
     def __pow__(self, other):
         assert isinstance(other, (int, float)), "only supporting int/float powers for now"
@@ -335,8 +353,8 @@ class Tensor:
     def __rtruediv__(self, other): # other / self
         return other * self**-1
 
-    def __repr__(self):
-        return f"Tensor(data={self.data}, grad={self.grad})"
+    # def __repr__(self):
+    #     return f"Tensor(data={self.data}, grad={self.grad})"
 
     @property
     def shape(self):
@@ -346,3 +364,5 @@ class Tensor:
     def size(self):
         return self.data.size
 
+    def sum(self):
+        return np.sum(self.data)
