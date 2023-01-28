@@ -39,6 +39,10 @@ class Model:
     def __call__(self, x: 'Tensor'):
         return self.forward(x)
 
+    def zero_grad(self):
+        for tensor in self.get_trainable_tensors():
+            tensor.grad = np.zeros_like(tensor.data)
+
     def get_trainable_tensors(self):
         trainable_tensors = set()
         for att in dir(self):
@@ -47,8 +51,13 @@ class Model:
                 trainable_tensors.add(attribute)
             elif issubclass(type(attribute), Model):
                 trainable_tensors |= attribute.get_trainable_tensors()
+            elif isinstance(attribute, list):
+                for el in attribute:
+                    if issubclass(type(el), Model):
+                        trainable_tensors |= el.get_trainable_tensors()
+                    elif isinstance(el, Tensor) and el._nograd is False:
+                        trainable_tensors.add(el)
         return trainable_tensors
-
 
 
 class SequentialModel(Model):
@@ -70,11 +79,11 @@ class Embedding(Model):
     def __init__(self, num_embeddings, embedding_dim):
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
-        self.W = Tensor(np.random.normal(size=(num_embeddings, embedding_dim), scale=0.02))
+        self.W = Tensor(np.random.normal(size=(num_embeddings, embedding_dim), scale=0.02), name="Embedding", nograd=False)
 
     def forward(self, vocab_ids):
 
-        one_hot = Tensor(np.eye(self.num_embeddings)[vocab_ids], nograd=True)
+        one_hot = Tensor(np.eye(self.num_embeddings)[vocab_ids], nograd=False)
 
         return one_hot.dot(self.W)  #split(self.num_embeddings) #[vocab_id]
 
@@ -105,14 +114,14 @@ class Embedding(Model):
 #         return x
 
 
-class Linear:
+class Linear(Model):
 
     def __init__(self, nin, nout, nonlin=None, use_bias=False, name='') -> None:
 
         self.nonlin = nonlin
         self.use_bias = use_bias
 
-        scale = 0.02 #np.sqrt(2/(nin+nout))
+        scale = 0.02  #np.sqrt(2/(nin+nout))
         npw = np.random.normal(size=(nin, nout), scale=scale)
         self.W = Tensor(npw, name=name)
 
@@ -145,6 +154,7 @@ class Tensor:
         self.name = f"{name}-[_op:{_op}]"
         self.data = np.array(data)
         self.grad = None
+        self.grad_mask = None
         if not nograd:
             self.grad = np.zeros(shape=self.data.shape) if grad is None else grad
             if grad is not None:
@@ -164,8 +174,8 @@ class Tensor:
             if not self._nograd:
                 self.grad += out.grad
             if not other._nograd:
-                if len(other.grad.shape)+1 == len(out.grad.shape):  # Bias
-                    other.grad += out.grad.sum(axis=0)
+                if other.grad.shape[-1] == out.grad.shape[-1] and other.grad.shape != out.grad.shape:  # Bias
+                    other.grad += out.grad.reshape(np.prod(out.grad.shape[:-1]), out.grad.shape[-1]).sum(axis=0)
                 else:
                     other.grad += out.grad
         out._backward = _backward
@@ -180,8 +190,8 @@ class Tensor:
             if not self._nograd:
                 self.grad += out.grad.dot(other.data.swapaxes(-1,-2))
             if not other._nograd:
-                other.grad += self.data.T.reshape(self.data.T.shape[0], np.prod(self.data.T.shape[1:])).dot(
-                                                                (out.grad.reshape(np.prod(out.grad.shape[:-1]), out.grad.shape[-1]))
+                other.grad += self.data.T.reshape(self.data.T.shape[0], int(np.prod(self.data.T.shape[1:]))).dot(
+                                                                (out.grad.reshape(int(np.prod(out.grad.shape[:-1])), out.grad.shape[-1]))
                                                             )
 
         out._backward = _backward
@@ -329,6 +339,8 @@ class Tensor:
 
         # go one variable at a time and apply the chain rule to get its gradient
         self.grad = np.ones(self.data.shape)
+        if self.grad_mask is not None:
+            self.grad = (self.grad.T*self.grad_mask).T
         for v in reversed(topo):
             v._backward()
 
@@ -366,3 +378,6 @@ class Tensor:
 
     def sum(self):
         return np.sum(self.data)
+
+    def mean(self):
+        return np.mean(self.data)

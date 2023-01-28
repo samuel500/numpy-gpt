@@ -130,12 +130,14 @@ class GPT(Model):
             logits = logits.reshape(-1, logits.shape[-1])
             y = y.reshape(-1)
             mask = np.array(y)
-            mask[mask!=-1] = 1
-            mask[mask==-1] = 0
+            mask[mask!=-3] = 1
+            mask[mask==-3] = 0
             y = Tensor(np.eye(self.vocab_size)[y], nograd=True) 
             softm = logits.softmax() 
-            loss = -(softm.log()*y + (1-y)*(1-softm).log())
-            loss.grad = (mask*loss.grad.T).T  # ignore -1 labels
+            loss = -(softm.log()*y + (1-y)*(1-softm).log()) #/ 64  #  64.0 #0.0
+            # mask = Tensor(mask, nograd=True)
+            # loss = (loss.T*mask).T  # ignore -1 labels
+            loss.grad_mask = mask
 
         return logits, loss
 
