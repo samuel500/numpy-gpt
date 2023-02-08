@@ -13,8 +13,9 @@ class SGD:
 
 class Adam:
     
-    def __init__(self, params, learning_rate=3e-4, betas=(0.9, 0.999)):
+    def __init__(self, params, learning_rate=3e-4, betas=(0.9, 0.95), weight_decay=0.1):
         self.learning_rate = learning_rate
+        self.weight_decay = weight_decay
         self.betas = betas  # momentum, decay_rate
 
         self.params = [
@@ -22,7 +23,8 @@ class Adam:
                 'param': param,
                 'velocities': np.zeros_like(param.grad),
                 'mean_squares': np.zeros_like(param.grad),
-                't': 1,
+                't': 0,
+                'weight_decay': weight_decay if 'Embedding' not in param.name else 0
             }
             for param in params
         ]
@@ -30,7 +32,9 @@ class Adam:
     def step(self):
 
         for tensor in self.params:
+            tensor['param'].data *= (1-self.learning_rate*tensor['weight_decay'])
             tensor['t'] += 1
+
             tensor['velocities'] = self.betas[0] * tensor['velocities'] + (1-self.betas[0]) * tensor['param'].grad
 
             velocities = tensor['velocities'] / (1 - self.betas[0]**tensor['t'])  # bias correction

@@ -2,12 +2,12 @@ import math
 
 import numpy as np
 
-from nptransformer.tensor import Tensor, Linear, SequentialModel, Model, Embedding, Sigmoid, Tanh, ReLU, NewGELU, Softmax
+from nptransformer.tensor import Tensor, Linear, SequentialModel, Model, Embedding, Dropout, Sigmoid, Tanh, ReLU, NewGELU, Softmax
 
 
 class MultiHeadSelfAttention(Model):
 
-    def __init__(self, n_embd, block_size, n_heads=8, name=''):
+    def __init__(self, n_embd, block_size, n_heads=8, name='', attn_pdrop=0.1, resid_pdrop=0.1):
         super().__init__()
         assert n_embd % n_heads == 0
 
@@ -18,46 +18,59 @@ class MultiHeadSelfAttention(Model):
 
         self.attn = Linear(n_embd, 3*n_embd, name=f"{name}-attn")
 
-        self.bias = (1-np.tril(np.ones(shape=(1, 1, self.block_size, self.block_size)))) #.astype(np.int8)
-        self.bias[self.bias==1.] = -np.inf
+        self.bias = (np.tril(np.ones(shape=(1, 1, self.block_size, self.block_size)))) #.astype(np.int8)
+        # self.bias[self.bias==1.] = -np.inf
 
-        self.out_proj = Linear(n_embd, n_embd, name="{name}-out_proj")
+        self.out_proj = Linear(n_embd, n_embd, name=f"{name}-out_proj")
 
-        # self.attn_dropout = Dropout(attn_pdrop)
-        # self.resid_dropout = Dropout(resid_pdrop)
+        self.attn_dropout = Dropout(attn_pdrop)
+        self.proj_dropout = Dropout(resid_pdrop)
 
     def forward(self, x):
         B, T, C = x.shape # batch size, sequence length, embedding dimensionality (n_embd)
 
-        k, q, v = self.attn(x).split(3, axis=2)
+        attn_out = self.attn(x)
+        k0, q0, v0 = attn_out.split(3, axis=2)
 
-        k = k.reshape(B, T, self.n_heads, C // self.n_heads).transpose(0,2,1,3)  # (B, nh, T, hs)  # reshape directly to correct shape??
-        q = q.reshape(B, T, self.n_heads, C // self.n_heads).transpose(0,2,1,3)  # (B, nh, T, hs)
-        v = v.reshape(B, T, self.n_heads, C // self.n_heads).transpose(0,2,1,3)  # (B, nh, T, hs)
+        k = (1*k0.reshape(B, T, self.n_heads, C // self.n_heads)).transpose(0,2,1,3)  # (B, nh, T, hs)  # reshape directly to correct shape??
+        # k = (1*k0).reshape(B, self.n_heads, T, C // self.n_heads) #.transpose(0,2,1,3)  # (B, nh, T, hs)  # reshape directly to correct shape??
+       
+        q = (1*q0.reshape(B, T, self.n_heads, C // self.n_heads)).transpose(0,2,1,3)  # (B, nh, T, hs)
+        # q = (1*q0).reshape(B, self.n_heads, T, C // self.n_heads) #.transpose(0,2,1,3)  # (B, nh, T, hs)  # reshape directly to correct shape??
 
-        att = (q @ k.transpose(0,1,3,2)) / math.sqrt(self.n_embd)
+        v = (1*v0.reshape(B, T, self.n_heads, C // self.n_heads)).transpose(0,2,1,3)  # (B, nh, T, hs)
+        # v = (1*v0).reshape(B, self.n_heads, T, C // self.n_heads) #.transpose(0,2,1,3)  # (B, nh, T, hs)  # reshape directly to correct shape??
+
+
+        att = (q @ k.transpose(0,1,3,2)) / math.sqrt(self.n_embd) #, nograd=True)
 
         # apply forward attention mask
-        att += self.bias[:,:,:T,:T]
-
-        att = Softmax(att)
+        att.data *= self.bias[:,:,:T,:T] # += self.bias[:,:,:T,:T]
+        att.data[att.data==0.] = -np.inf
+        soft_att = Softmax(att)
 
         # att dropout
+        soft_att = self.attn_dropout(soft_att)
 
-        out = att @ v  # batch, n_heads, seq_len, n_embd // n_heads
+        out = soft_att @ v  # batch, n_heads, seq_len, n_embd // n_heads
 
-        out = out.transpose(0,2,1,3).reshape(B,T,C)  # B, T, C  # reshape directly to correct shape??
+        trans_out = 1*out.transpose(0,2,1,3)
+        
+        reshape_out = trans_out.reshape(B,T,C)  # B, T, C  # reshape directly to correct shape??
 
-        out = self.out_proj(out)  
+        # reshape_out = out.reshape(B,T,C)  # B, T, C  # reshape directly to correct shape??
 
-        # resid dropout
 
-        return out
+        proj_out = self.out_proj(reshape_out)  
+
+        proj_out = self.proj_dropout(proj_out)
+
+        return proj_out
 
 
 class Block(Model):
 
-    def __init__(self, n_embd, block_size, n_heads = 8, name=''):
+    def __init__(self, n_embd, block_size, n_heads = 8, name='', mlp_pdrop=0.1):
         super().__init__()
         # LayerNorm 1 & 2
 
@@ -67,6 +80,7 @@ class Block(Model):
             layers = [
                 Linear(n_embd, 4 * n_embd, nonlin=NewGELU, name=f"{name}-mlp0"),
                 Linear(4 * n_embd, n_embd, name=f"{name}-mlp1"),
+                Dropout(mlp_pdrop)
             ]
         )
 
@@ -86,7 +100,7 @@ class GPT(Model):
         self.word_embedding = Embedding(vocab_size, n_embd)
         self.positional_embedding = Embedding(block_size, n_embd)
 
-        # dropout 
+        self.drop = Dropout()
 
         self.blocks = [Block(n_embd=n_embd, block_size=block_size, n_heads=n_heads, name=f"Block[{i}]") for i in range(n_layers)]
 
@@ -111,12 +125,12 @@ class GPT(Model):
         tok_emb = self.word_embedding(idx) # batch, seq, embedding size
 
         # pos = np.expand_dims(np.arange(t), axis=0)
-        pos = np.arange(t)
+        pos = np.atleast_2d(np.arange(t)).repeat(idx.shape[0], axis=0)
         pos_emb = self.positional_embedding(pos)
 
         x = tok_emb + pos_emb
 
-        # dropout
+        x = self.drop(x)
 
         for block in self.blocks:
             x = block(x)
@@ -132,11 +146,11 @@ class GPT(Model):
             mask = np.array(y)
             mask[mask!=-3] = 1
             mask[mask==-3] = 0
-            y = Tensor(np.eye(self.vocab_size)[y], nograd=True) 
-            softm = logits.softmax() 
-            loss = -(softm.log()*y + (1-y)*(1-softm).log()) #/ 64  #  64.0 #0.0
-            # mask = Tensor(mask, nograd=True)
-            # loss = (loss.T*mask).T  # ignore -1 labels
+            y = Tensor(np.array(np.eye(self.vocab_size)[y], dtype=np.float64), nograd=False) 
+            log_softm = logits.log_softmax() 
+            loss = -log_softm*y
+            loss /= (loss.shape[0]/2)  #12288
+            loss.data = (loss.data.T*mask).T  # ignore -1 labels
             loss.grad_mask = mask
 
         return logits, loss
@@ -148,8 +162,10 @@ class GPT(Model):
             logits, _ = self(idx)
 
             logits = logits.data[:,-1,:]
-            exp_self = np.exp(logits)
-            probs = exp_self / np.sum(exp_self, axis=-1, keepdims=True)
+            # exp_self = np.exp(logits)
+            probs = Tensor(logits).softmax().data #
+
+            # probs = exp_self / np.sum(exp_self, axis=-1, keepdims=True)
 
             x_next = np.argmax(probs, axis=-1)
             x_next = np.expand_dims(x_next, axis=1)

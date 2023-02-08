@@ -27,10 +27,16 @@ def Sigmoid(data: 'Tensor'):
 def Softmax(data: 'Tensor'):
     return data.softmax()
 
+def LogSoftmax(data: 'Tensor'):
+    return data.log_softmax()
+
 def Exp(data: 'Tensor'):
     return data.exp()
 
 class Model:
+
+    def __init__(self):
+        self.training = True
 
     @abstractmethod
     def forward(self, x: 'Tensor'):
@@ -59,6 +65,45 @@ class Model:
                         trainable_tensors.add(el)
         return trainable_tensors
 
+    def get_model_objects(self):
+        model_objects = set({self})
+        for att in dir(self):
+            attribute = getattr(self, att)
+            if issubclass(type(attribute), Model):
+                model_objects |= attribute.get_model_objects()
+            elif isinstance(attribute, list):
+                for el in attribute:
+                    if issubclass(type(el), Model):
+                        model_objects |= el.get_model_objects()
+
+        return model_objects
+
+    def train(self):
+        """Set to train mode."""
+        for model_obj in self.get_model_objects():
+            model_obj.training = True
+
+    def eval(self):
+        """Set to eval mode."""
+        for model_obj in self.get_model_objects():
+            model_obj.training = False
+
+class Dropout(Model):
+
+    def __init__(self, p=0.1):
+        """
+        :param p: probability of an element being zeroed.
+        """
+        super().__init__()
+        self.p = p
+
+    def forward(self, x: 'Tensor'):
+        if self.training:
+            x *= 1/(1-self.p)
+            mask = (np.random.rand(*x.shape) > self.p)
+            x *= mask # + 1e-8
+        return x
+
 
 class SequentialModel(Model):
     """
@@ -66,6 +111,7 @@ class SequentialModel(Model):
     """
 
     def __init__(self, layers: list):
+        super().__init__()
         self.layers = layers
 
     def forward(self, x: 'Tensor'):
@@ -77,53 +123,30 @@ class SequentialModel(Model):
 class Embedding(Model):
 
     def __init__(self, num_embeddings, embedding_dim):
+        super().__init__()
         self.num_embeddings = num_embeddings
         self.embedding_dim = embedding_dim
-        self.W = Tensor(np.random.normal(size=(num_embeddings, embedding_dim), scale=0.02), name="Embedding", nograd=False)
+        self.weight = Tensor(np.random.normal(size=(num_embeddings, embedding_dim), scale=0.02), name="Embedding", nograd=False)
 
     def forward(self, vocab_ids):
 
-        one_hot = Tensor(np.eye(self.num_embeddings)[vocab_ids], nograd=False)
+        one_hot = Tensor(np.eye(self.num_embeddings)[vocab_ids], nograd=True)
 
-        return one_hot.dot(self.W)  #split(self.num_embeddings) #[vocab_id]
-
-
-# class TestModel(Model):
-#     def __init__(self):
-#         self.fc1 = Linear(784, 64, nonlin=ReLU)
-
-#         self.fc2a = Linear(32, 32, nonlin=ReLU)
-#         self.fc2b = Linear(32, 32, nonlin=ReLU)
-#         # self.fc2a = FC(16, 16, nonlin=ReLU)
-#         # self.fc2b = FC(16, 16, nonlin=ReLU)
-#         # self.fc2c = FC(16, 16, nonlin=ReLU)
-#         # self.fc2d = FC(16, 16, nonlin=ReLU)
-
-#         self.fc3 = Linear(64, 10)
-
-#     def forward(self, x: 'Tensor'):
-
-#         x = self.fc1(x)
-#         x1, x2 = x.split(2, -1)
-#         x1 = self.fc2a(x1)
-#         x2 = self.fc2b(x2)
-#         # x = ...
-
-#         x = self.fc3(x)
-
-#         return x
+        return one_hot @ self.weight
 
 
 class Linear(Model):
 
     def __init__(self, nin, nout, nonlin=None, use_bias=False, name='') -> None:
-
+        super().__init__()
         self.nonlin = nonlin
         self.use_bias = use_bias
 
-        scale = 0.02  #np.sqrt(2/(nin+nout))
+        scale = 0.02  #
+        # scale = np.sqrt(2/(nin+nout))
+
         npw = np.random.normal(size=(nin, nout), scale=scale)
-        self.W = Tensor(npw, name=name)
+        self.weight = Tensor(npw, name=name)
 
         self.B = None
         if self.use_bias:
@@ -133,7 +156,7 @@ class Linear(Model):
         return self.forward(x)
         
     def forward(self, x) -> 'Tensor':
-        x = x.dot(self.W)
+        x = x @ self.weight
         if self.use_bias:
             x += self.B
         if self.nonlin:
@@ -152,16 +175,16 @@ class Tensor:
         self._op = _op # the op that produced this node, for graphviz / debugging / etc
 
         self.name = f"{name}-[_op:{_op}]"
-        self.data = np.array(data)
+        self.data = np.array(data).astype(np.float32)
         self.grad = None
         self.grad_mask = None
         if not nograd:
-            self.grad = np.zeros(shape=self.data.shape) if grad is None else grad
+            self.grad = np.zeros(shape=self.data.shape).astype(np.float32) if grad is None else grad
             if grad is not None:
                 assert grad.shape == self.data.shape
 
     def __repr__(self):
-        return f"Tensor({self.shape})[{self.name}]"
+        return f"Tensor({self.shape})[{self.name}]: {self.data}"
 
     def __add__(self, other):
         # other = other if isinstance(other, Tensor) else Tensor(other)
@@ -238,7 +261,7 @@ class Tensor:
         out._backward = _backward
 
         return out
-
+    
     def __matmul__(self, other):  # @ operator
         out = Tensor(self.data @ other.data, (self, other), '@')
 
@@ -246,7 +269,13 @@ class Tensor:
             if not self._nograd:
                 self.grad += (other.data @ out.grad.swapaxes(-1,-2)).swapaxes(-1,-2)
             if not other._nograd:
-                other.grad += self.data.swapaxes(-1,-2) @ out.grad
+                rev_grad = self.data.swapaxes(-1,-2) @ out.grad
+                if len(rev_grad.shape) > len(other.grad.shape):
+                    other.grad += np.sum(rev_grad, axis=0)
+                else:
+                    other.grad += rev_grad
+                # other.grad += np.sum(self.data.swapaxes(-1,-2) @ out.grad, axis=0)  # hmm
+                # other.grad += self.data.swapaxes(-1,-2) @ out.grad
 
         out._backward = _backward
 
@@ -314,6 +343,22 @@ class Tensor:
 
         return out
 
+    def log_softmax(self):
+        self.data -= np.max(self.data, axis=-1, keepdims=True) 
+        exp_self = np.exp(self.data)
+        softmax_self = exp_self / np.sum(exp_self, axis=-1, keepdims=True)
+
+        out = Tensor(self.data-np.log(np.sum(exp_self, axis=-1, keepdims=True)), (self,), 'log_softmax')
+
+        def _backward():
+            # self.grad += (1-softmax_self) * out.grad
+            # self.grad += (1-np.sum(softmax_self*out.grad, axis=-1, keepdims=True))
+            # self.grad += out.grad - (np.exp(out.data).T * np.sum(out.grad, axis=-1)).T
+            self.grad += out.grad - (softmax_self.T * np.sum(out.grad, axis=-1)).T
+
+        out._backward = _backward
+        return out
+
     def softmax(self):
         self.data -= np.max(self.data, axis=-1, keepdims=True)  # stability 
 
@@ -321,7 +366,8 @@ class Tensor:
         out = Tensor(exp_self / np.sum(exp_self, axis=-1, keepdims=True), (self,), 'softmax')
 
         def _backward():
-            self.grad += (out.data * (1 - out.data)) * out.grad
+            self.grad += (out.data * (out.grad.transpose((-1, *tuple(range(len(out.grad.shape)-1)))) - np.sum(out.grad*out.data, axis=-1)).transpose(((*tuple(range(1, len(out.grad.shape))), 0))))  #?
+            # self.grad += (out.data * (out.grad - out.grad*out.data))
         out._backward = _backward
         return out
 
@@ -365,9 +411,6 @@ class Tensor:
     def __rtruediv__(self, other): # other / self
         return other * self**-1
 
-    # def __repr__(self):
-    #     return f"Tensor(data={self.data}, grad={self.grad})"
-
     @property
     def shape(self):
         return self.data.shape
@@ -376,8 +419,14 @@ class Tensor:
     def size(self):
         return self.data.size
 
-    def sum(self):
-        return np.sum(self.data)
+    def sum(self, axis=None):
+        # out = Tensor(np.sum(self.data, axis=axis), _children=(self))
+        # def _backward():
+        #     self.grad += out.grad
+        # out._backward = _backward
 
-    def mean(self):
-        return np.mean(self.data)
+        # return out
+        return np.sum(self.data, axis=axis)
+
+    def mean(self, axis=None):
+        return np.mean(self.data, axis=axis)
