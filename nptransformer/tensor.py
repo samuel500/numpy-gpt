@@ -33,6 +33,17 @@ def LogSoftmax(data: 'Tensor'):
 def Exp(data: 'Tensor'):
     return data.exp()
 
+
+def cross_entropy(logits: 'Tensor', target: 'Tensor', reduction='mean'):
+    log_softm = logits.log_softmax() 
+    loss = -log_softm*target
+
+    if reduction == 'mean':
+        loss /= loss.shape[0]
+    
+    return loss
+
+
 class Model:
 
     def __init__(self):

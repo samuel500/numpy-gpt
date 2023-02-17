@@ -2,7 +2,7 @@ import math
 
 import numpy as np
 
-from nptransformer.tensor import Tensor, Linear, SequentialModel, Model, Embedding, Dropout, Sigmoid, Tanh, ReLU, NewGELU, Softmax
+from nptransformer.tensor import Tensor, Linear, SequentialModel, Model, Embedding, Dropout, Sigmoid, Tanh, ReLU, NewGELU, Softmax, cross_entropy
 
 
 class MultiHeadSelfAttention(Model):
@@ -45,7 +45,7 @@ class MultiHeadSelfAttention(Model):
         att = (q @ k.transpose(0,1,3,2)) / math.sqrt(self.n_embd) #, nograd=True)
 
         # apply forward attention mask
-        att.data *= self.bias[:,:,:T,:T] # += self.bias[:,:,:T,:T]
+        att.data *= self.bias[:,:,:T,:T]  # += self.bias[:,:,:T,:T]
         att.data[att.data==0.] = -np.inf
         soft_att = Softmax(att)
 
@@ -70,11 +70,18 @@ class MultiHeadSelfAttention(Model):
 
 class Block(Model):
 
-    def __init__(self, n_embd, block_size, n_heads = 8, name='', mlp_pdrop=0.1):
+    def __init__(self, n_embd, block_size, n_heads = 8, name='', mlp_pdrop=0.1, attn_pdrop=0.1, resid_pdrop=0.1):
         super().__init__()
         # LayerNorm 1 & 2
 
-        self.attn = MultiHeadSelfAttention(n_embd=n_embd, block_size=block_size, n_heads=n_heads, name=f"{name}-MHSA")
+        self.attn = MultiHeadSelfAttention(
+            n_embd=n_embd, 
+            block_size=block_size, 
+            n_heads=n_heads, 
+            name=f"{name}-MHSA", 
+            attn_pdrop=attn_pdrop, 
+            resid_pdrop=resid_pdrop
+        )
 
         self.mlp = SequentialModel(
             layers = [
@@ -93,16 +100,16 @@ class Block(Model):
 class GPT(Model):
 
 
-    def __init__(self, n_layers, n_heads, n_embd, vocab_size, block_size):
+    def __init__(self, n_layers, n_heads, n_embd, vocab_size, block_size, pdrop=0.1):
         super().__init__()
         self.vocab_size = vocab_size
         # embeddings init
         self.word_embedding = Embedding(vocab_size, n_embd)
         self.positional_embedding = Embedding(block_size, n_embd)
 
-        self.drop = Dropout()
+        self.drop = Dropout(pdrop)
 
-        self.blocks = [Block(n_embd=n_embd, block_size=block_size, n_heads=n_heads, name=f"Block[{i}]") for i in range(n_layers)]
+        self.blocks = [Block(n_embd=n_embd, block_size=block_size, n_heads=n_heads, name=f"Block[{i}]", mlp_pdrop=pdrop, attn_pdrop=pdrop, resid_pdrop=pdrop) for i in range(n_layers)]
 
         # layernorm
 
@@ -144,13 +151,14 @@ class GPT(Model):
             logits = logits.reshape(-1, logits.shape[-1])
             y = y.reshape(-1)
             mask = np.array(y)
-            mask[mask!=-3] = 1
-            mask[mask==-3] = 0
+            mask[mask!=-1] = 1
+            mask[mask==-1] = 0
             y = Tensor(np.array(np.eye(self.vocab_size)[y], dtype=np.float64), nograd=False) 
-            log_softm = logits.log_softmax() 
-            loss = -log_softm*y
-            loss /= (loss.shape[0]/2)  #12288
-            loss.data = (loss.data.T*mask).T  # ignore -1 labels
+            # log_softm = logits.log_softmax() 
+            # loss = -log_softm*y
+            # loss /= (loss.shape[0]/2)  #12288
+            loss = cross_entropy(logits=logits, target=y)
+            loss.data = ((loss.data.T*mask).T)*(mask.size/(mask!=0).sum())  # ignore -1 labels
             loss.grad_mask = mask
 
         return logits, loss
