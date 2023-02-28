@@ -41,6 +41,5 @@ class Adam:
             tensor['mean_squares'] = self.betas[1] * tensor['mean_squares'] + (1 - self.betas[1]) * (tensor['param'].grad**2) 
             mean_squares = tensor['mean_squares'] / (1 - self.betas[1]**tensor['t'])
 
-            # tensor['param'].data -= self.learning_rate * np.clip(velocities / (np.sqrt(mean_squares)+1e-8), -1, 1)
             tensor['param'].data -= self.learning_rate * velocities / (np.sqrt(mean_squares)+1e-8)
 

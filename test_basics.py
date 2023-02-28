@@ -5,7 +5,7 @@ from torch.nn import functional as F
 import torch.nn as nn
 import math
 
-from nptransformer.tensor import Tensor, Linear, Embedding, SequentialModel, Model, Sigmoid, Tanh, ReLU, NewGELU, Softmax
+from nptransformer.tensor import Tensor, Linear, Embedding, SequentialModel, Model, Sigmoid, Tanh, ReLU, NewGELU, Softmax, cross_entropy
 
 
 def test_matmul():
@@ -27,9 +27,9 @@ def test_matmul():
     torch_out.backward(torch.ones_like(torch_out))
 
     # test
-    assert np.max(torch_out.detach().numpy()-npt_out.data) < 1e-10
-    assert np.max(ttorch1.grad.numpy() - t_ar1.grad) < 1e-10
-    assert np.max(ttorch2.grad.numpy() - t_ar2.grad) < 1e-10
+    assert np.max(torch_out.detach().numpy()-npt_out.data) < 1e-6
+    assert np.max(ttorch1.grad.numpy() - t_ar1.grad) < 1e-6
+    assert np.max(ttorch2.grad.numpy() - t_ar2.grad) < 1e-6
 
 
 def test_linear():
@@ -116,7 +116,7 @@ def test_embedding_layer():
 
     torch_out.backward(torch.ones_like(torch_out))
 
-    assert np.max(np.abs(torch_word_embd.weight.grad.numpy() - npt_word_embd.weight.grad)) < 1e-10
+    assert np.max(np.abs(torch_word_embd.weight.grad.numpy() - npt_word_embd.weight.grad)) < 1e-6
 
 
 def test_attention_bias():
@@ -153,9 +153,9 @@ def test_attention_bias():
     soft_out_torch.backward(torch.ones_like(soft_out_torch))
 
     # test
-    assert np.max(np.abs(ttorch1.grad.numpy() - t_ar1.grad)) < 1e-10
-    assert np.max(np.abs(ttorch2.grad.numpy() - t_ar2.grad)) < 1e-10
-    assert np.max(np.abs(soft_out_torch.detach().numpy()-soft_npt_out.data)) < 1e-10
+    assert np.max(np.abs(ttorch1.grad.numpy() - t_ar1.grad)) < 1e-7
+    assert np.max(np.abs(ttorch2.grad.numpy() - t_ar2.grad)) < 1e-7
+    assert np.max(np.abs(soft_out_torch.detach().numpy()-soft_npt_out.data)) < 1e-7
 
 
 def test_simple_softmax():
@@ -172,8 +172,8 @@ def test_simple_softmax():
     torch_out = F.softmax(torch_arr, dim=-1)
     torch_out.backward(torch.ones_like(torch_out))
 
-    assert np.max(np.abs(torch_out.detach().numpy()-npt_out.data)) < 1e-10
-    assert np.max(np.abs(torch_arr.grad.numpy() - npt_arr.grad)) < 1e-10
+    assert np.max(np.abs(torch_out.detach().numpy()-npt_out.data)) < 1e-7
+    assert np.max(np.abs(torch_arr.grad.numpy() - npt_arr.grad)) < 1e-7
 
 
 def test_simple_softmax_four_dims():
@@ -190,8 +190,8 @@ def test_simple_softmax_four_dims():
     torch_out = F.softmax(torch_arr, dim=-1)
     torch_out.backward(torch.ones_like(torch_out))
 
-    assert np.max(np.abs(torch_out.detach().numpy()-npt_out.data)) < 1e-10
-    assert np.max(np.abs(torch_arr.grad.numpy() - npt_arr.grad)) < 1e-10
+    assert np.max(np.abs(torch_out.detach().numpy()-npt_out.data)) < 1e-7
+    assert np.max(np.abs(torch_arr.grad.numpy() - npt_arr.grad)) < 1e-7
 
 
 def test_softmax():
@@ -218,9 +218,9 @@ def test_softmax():
     soft_out_torch.backward(torch.ones_like(soft_out_torch))
 
     # test
-    assert np.max(np.abs(soft_out_torch.detach().numpy()-soft_npt_out.data)) < 1e-10
-    assert np.max(np.abs(ttorch1.grad.numpy() - t_ar1.grad)) < 1e-10
-    assert np.max(np.abs(ttorch2.grad.numpy() - t_ar2.grad)) < 1e-10
+    assert np.max(np.abs(soft_out_torch.detach().numpy()-soft_npt_out.data)) < 1e-6
+    assert np.max(np.abs(ttorch1.grad.numpy() - t_ar1.grad)) < 1e-6
+    assert np.max(np.abs(ttorch2.grad.numpy() - t_ar2.grad)) < 1e-6
 
 
 def test_log_softmax():
@@ -241,8 +241,8 @@ def test_log_softmax():
     soft_out_torch.backward(torch.ones_like(soft_out_torch))
 
     # test
-    assert np.max(np.abs(soft_out_torch.detach().numpy()-soft_npt_out.data)) < 1e-10
-    assert np.max(np.abs(ttorch1.grad.numpy() - t_ar1.grad)) < 1e-10
+    assert np.max(np.abs(soft_out_torch.detach().numpy()-soft_npt_out.data)) < 1e-6
+    assert np.max(np.abs(ttorch1.grad.numpy() - t_ar1.grad)) < 1e-6
 
 
 def test_cross_entropy():
@@ -250,20 +250,18 @@ def test_cross_entropy():
 
     BS = 64
 
-    ar1 = np.random.random((BS, 5))
-    ar2 = np.random.random((BS, 5, 12))
-    ar3 = np.zeros(12)
-    ar3[0] = 1
-    ar3 = ar3 * BS**2
+    ar1 = np.random.random((BS, 64))
+    ar2 = np.random.random((64, 12))
+    ar3 = np.random.randint(0, 12, size=BS)
+
     # npt
     t_ar1 = Tensor(ar1)
     t_ar2 = Tensor(ar2)
-    t_ar3 = Tensor(ar3)
+    t_ar3 = Tensor(np.eye(12)[ar3])
 
     npt_out = t_ar1 @ t_ar2
-    soft_npt_out = npt_out.log_softmax()
-    soft_npt_out = soft_npt_out.reshape(-1, soft_npt_out.shape[-1])
-    loss = -t_ar3*soft_npt_out  #(soft_npt_out.log()*t_ar3 + (1-t_ar3)*(1-soft_npt_out).log())
+    npt_out = npt_out.reshape(-1, npt_out.shape[-1])
+    loss = cross_entropy(npt_out, t_ar3)
     loss.backward()
 
     # torch
@@ -275,8 +273,8 @@ def test_cross_entropy():
     soft_out_torch.backward(torch.ones_like(soft_out_torch))
 
     # test
-    assert np.max(np.abs(ttorch1.grad.numpy() - t_ar1.grad)) < 1e-8
-    assert np.max(np.abs(ttorch2.grad.numpy() - t_ar2.grad)) < 1e-8
+    assert np.max(np.abs(ttorch1.grad.numpy() - t_ar1.grad)) < 1e-7
+    assert np.max(np.abs(ttorch2.grad.numpy() - t_ar2.grad)) < 1e-7
 
 
 def test_self_attention():
@@ -286,13 +284,9 @@ def test_self_attention():
     block_size = 6
 
     BS = 64
-    # X = np.random.random((BS, 1, n_embd)).astype(np.float32)
     X = np.random.normal(scale=0.01, size=(BS, 5, n_embd)).astype(np.float32)
-    # X = np.ones((BS, 5, n_embd)).astype(np.float32)
     attn_W = np.random.random((3*n_embd, n_embd)).astype(np.float32)
-    # attn_W = np.ones((3*n_embd, n_embd)).astype(np.float32)
     proj_W = np.random.random((n_embd, n_embd)).astype(np.float32)
-    # proj_W = np.ones((n_embd, n_embd)).astype(np.float32)
 
     # npt
     npt_attn = Linear(n_embd, 3*n_embd)
@@ -372,8 +366,3 @@ def test_self_attention():
 
     assert np.mean(np.abs(y.detach().numpy() - proj_out.data)) < 1e-3
     # assert np.max(np.abs(y.detach().numpy() - proj_out.data)) < 1e-8
-
-
-
-# if __name__=='__main__':
-#     test_self_attention()

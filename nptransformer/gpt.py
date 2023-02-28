@@ -1,3 +1,7 @@
+# Resources:
+# https://github.com/karpathy/minGPT/blob/master/mingpt/model.py
+# https://huggingface.co/transformers/v4.8.2/_modules/transformers/models/gpt_neo/modeling_gpt_neo.html
+
 import math
 
 import numpy as np
@@ -16,12 +20,12 @@ class MultiHeadSelfAttention(Model):
 
         self.block_size = block_size
 
-        self.attn = Linear(n_embd, 3*n_embd, name=f"{name}-attn")
+        self.attn = Linear(n_embd, 3*n_embd, use_bias=False, name=f"{name}-attn")
 
         self.bias = (np.tril(np.ones(shape=(1, 1, self.block_size, self.block_size)))) #.astype(np.int8)
         # self.bias[self.bias==1.] = -np.inf
 
-        self.out_proj = Linear(n_embd, n_embd, name=f"{name}-out_proj")
+        self.out_proj = Linear(n_embd, n_embd, use_bias=True, name=f"{name}-out_proj")
 
         self.attn_dropout = Dropout(attn_pdrop)
         self.proj_dropout = Dropout(resid_pdrop)
@@ -180,7 +184,6 @@ class GPT(Model):
             idx = np.concatenate((idx, x_next), axis=1) 
             
         return idx
-
 
 
 
