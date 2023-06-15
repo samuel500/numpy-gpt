@@ -26,7 +26,7 @@ class Adam:
                 't': 0,
                 'weight_decay': weight_decay if 'Embedding' not in param.name else 0
             }
-            for param in params
+            for param in params if param.requires_grad
         ]
 
     def step(self):

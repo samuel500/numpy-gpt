@@ -9,8 +9,8 @@ import torch
 from torch.utils.data import Dataset
 from torch.utils.data.dataloader import DataLoader
 
-from nptransformer.gpt import GPT
-from nptransformer.optim import Adam, SGD
+from npgpt.gpt import GPT
+from npgpt.optim import Adam, SGD
 
 import random
 import time
@@ -249,7 +249,7 @@ if __name__ == '__main__':
     vocab_size = train_dataset.get_vocab_size()
     block_size = train_dataset.get_block_size()
     model = GPT(n_layers=1, n_heads=4, n_embd=64, vocab_size=vocab_size, block_size=block_size)
-    optim = Adam(model.get_trainable_tensors(), learning_rate=5e-4)
+    optim = Adam(model.get_tensors(only_trainable=True), learning_rate=5e-4)
     # optim = SGD(model.get_trainable_tensors())
 
     # construct the trainer object
@@ -263,7 +263,6 @@ if __name__ == '__main__':
         factors = np.array([[10**i for i in range(ndigit+1)][::-1]]) #.to(trainer.device)
         loader = DataLoader(dataset, batch_size=100, num_workers=0, drop_last=False)
         for b, (x, y) in enumerate(loader):
-            # x = x #.to(trainer.device)
             # isolate the first two digits of the input sequence alone
             d1d2 = x[:, :ndigit*2]
             # let the model sample the rest of the sequence

@@ -6,7 +6,7 @@ import math
 
 import numpy as np
 
-from nptransformer.tensor import Tensor, Linear, SequentialModel, Model, Embedding, Dropout, Sigmoid, Tanh, ReLU, NewGELU, Softmax, cross_entropy
+from npgpt.tensor import Tensor, Linear, SequentialModel, Model, Embedding, Dropout, Sigmoid, Tanh, ReLU, NewGELU, Softmax, cross_entropy
 
 
 class MultiHeadSelfAttention(Model):

@@ -5,7 +5,7 @@ from torch.nn import functional as F
 import torch.nn as nn
 import math
 
-from nptransformer.tensor import Tensor, Linear, Embedding, SequentialModel, Model, Sigmoid, Tanh, ReLU, NewGELU, Softmax, cross_entropy
+from npgpt.tensor import Tensor, Linear, Embedding, SequentialModel, Model, Sigmoid, Tanh, ReLU, NewGELU, Softmax, cross_entropy
 
 
 def test_matmul():

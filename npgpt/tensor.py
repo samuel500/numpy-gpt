@@ -57,23 +57,25 @@ class Model:
         return self.forward(x)
 
     def zero_grad(self):
-        for tensor in self.get_trainable_tensors():
+        for tensor in self.get_tensors(only_trainable=True):
             tensor.grad = np.zeros_like(tensor.data)
 
-    def get_trainable_tensors(self):
+    def get_tensors(self, only_trainable: bool = True) -> set:
         trainable_tensors = set()
         for att in dir(self):
             attribute = getattr(self, att)
-            if isinstance(attribute, Tensor) and attribute._nograd is False:
-                trainable_tensors.add(attribute)
+            if isinstance(attribute, Tensor):
+                if (not attribute._nograd and only_trainable) or not only_trainable:
+                    trainable_tensors.add(attribute)
             elif issubclass(type(attribute), Model):
-                trainable_tensors |= attribute.get_trainable_tensors()
+                trainable_tensors |= attribute.get_tensors(only_trainable=only_trainable)
             elif isinstance(attribute, list):
                 for el in attribute:
                     if issubclass(type(el), Model):
-                        trainable_tensors |= el.get_trainable_tensors()
-                    elif isinstance(el, Tensor) and el._nograd is False:
-                        trainable_tensors.add(el)
+                        trainable_tensors |= el.get_tensors(only_trainable=only_trainable)
+                    elif isinstance(el, Tensor):
+                        if (not el._nograd and only_trainable) or not only_trainable:
+                            trainable_tensors.add(el)
         return trainable_tensors
 
     def get_model_objects(self):
@@ -98,6 +100,11 @@ class Model:
         """Set to eval mode."""
         for model_obj in self.get_model_objects():
             model_obj.training = False
+
+    def save(self):
+        """Save model parameters."""
+        pass
+
 
 class Dropout(Model):
 
@@ -204,16 +211,26 @@ class Tensor:
         out = Tensor(self.data + other.data, (self, other), '+')
 
         def _backward():
-            if not self._nograd:
-                self.grad += out.grad
-            if not other._nograd:
-                if other.grad.shape[-1] == out.grad.shape[-1] and other.grad.shape != out.grad.shape:  # Bias
-                    other.grad += out.grad.reshape(np.prod(out.grad.shape[:-1]), out.grad.shape[-1]).sum(axis=0)  # hmm
-                else:
-                    other.grad += out.grad
+            if self.grad is not None:
+                ndims_added = len(out.grad.shape) - len(self.data.shape)
+                grad_wrt_self = out.grad
+                for _ in range(ndims_added):
+                    grad_wrt_self = grad_wrt_self.sum(axis=0)
+                self.grad += grad_wrt_self
+            if other.grad is not None:
+                ndims_added = len(out.grad.shape) - len(other.data.shape)
+                grad_wrt_other = out.grad
+                for _ in range(ndims_added):
+                    grad_wrt_other = grad_wrt_other.sum(axis=0)
+                other.grad += grad_wrt_other
+
         out._backward = _backward
 
         return out
+
+    @property
+    def requires_grad(self):
+        return not self._nograd
 
     def dot(self, other):
         other = other if isinstance(other, Tensor) else Tensor(other)
@@ -275,16 +292,18 @@ class Tensor:
         out = Tensor(self.data @ other.data, (self, other), '@')
 
         def _backward():
-            if not self._nograd:
-                self.grad += (other.data @ out.grad.swapaxes(-1,-2)).swapaxes(-1,-2)
-            if not other._nograd:
-                rev_grad = self.data.swapaxes(-1,-2) @ out.grad
-                if len(rev_grad.shape) > len(other.grad.shape):  # hmm
-                    other.grad += np.sum(rev_grad, axis=0)
-                else:
-                    other.grad += rev_grad
-                # other.grad += np.sum(self.data.swapaxes(-1,-2) @ out.grad, axis=0)  # hmm
-                # other.grad += self.data.swapaxes(-1,-2) @ out.grad
+            if self.grad is not None:
+                grad_wrt_self = out.grad @ other.data.swapaxes(-1, -2)
+                ndims_added = len(grad_wrt_self.shape) - len(self.data.shape)
+                for _ in range(ndims_added):
+                    grad_wrt_self = grad_wrt_self.sum(axis=0)
+                self.grad += grad_wrt_self
+            if other.grad is not None: 
+                grad_wrt_other = self.data.swapaxes(-1, -2) @ out.grad
+                ndims_added = len(grad_wrt_other.shape) - len(other.data.shape)
+                for _ in range(ndims_added):
+                    grad_wrt_other = grad_wrt_other.sum(axis=0)
+                other.grad += grad_wrt_other
 
         out._backward = _backward
 
@@ -372,8 +391,10 @@ class Tensor:
         out = Tensor(exp_self / np.sum(exp_self, axis=-1, keepdims=True), (self,), 'softmax')
 
         def _backward():
-            self.grad += (out.data * (out.grad.transpose((-1, *tuple(range(len(out.grad.shape)-1)))) - np.sum(out.grad*out.data, axis=-1)).transpose(((*tuple(range(1, len(out.grad.shape))), 0))))  # hmm
-            # self.grad += (out.data * (out.grad - out.grad*out.data))
+            kr_delta = np.eye(self.data.shape[-1])[None, :]  # compute Kronecker delta
+            grad_softmax = out.data[..., None] * (kr_delta - out.data[..., None, :])  # compute grad softmax
+            self.grad += np.einsum('...ij,...j->...i', grad_softmax, out.grad)
+
         out._backward = _backward
         return out
 
